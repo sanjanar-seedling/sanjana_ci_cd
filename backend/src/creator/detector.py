@@ -209,11 +209,26 @@ def detect_language(repo_path: str) -> RepoAnalysis:
     framework = None
     test_runner = None
 
+    # First check root-level manifests
     for manifest in MANIFEST_PRIORITY:
         if (path / manifest).exists():
             language = LANGUAGE_MAP[manifest]
             package_manager = PACKAGE_MANAGER_MAP[manifest]
             break
+
+    # If unknown, scan immediate subdirectories for manifests (monorepo / nested project)
+    if language == "unknown":
+        for subdir in sorted(path.iterdir()):
+            if not subdir.is_dir() or subdir.name.startswith("."):
+                continue
+            for manifest in MANIFEST_PRIORITY:
+                if (subdir / manifest).exists():
+                    language = LANGUAGE_MAP[manifest]
+                    package_manager = PACKAGE_MANAGER_MAP[manifest]
+                    logger.info("Detected %s in subdirectory %s", language, subdir.name)
+                    break
+            if language != "unknown":
+                break
 
     available_scripts: list[str] = []
     has_test_extras = False

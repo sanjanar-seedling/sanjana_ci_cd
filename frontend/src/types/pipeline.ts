@@ -52,6 +52,30 @@ export interface StageUpdate {
   recovery_strategy?: string;
   recovery_reason?: string;
   modified_command?: string;
+  log_type?: LogType;
+  log_message?: string;
+}
+
+export type LogType =
+  | 'stage_start'
+  | 'stage_success'
+  | 'stage_failed'
+  | 'stage_skipped'
+  | 'retry'
+  | 'recovery_start'
+  | 'recovery_plan'
+  | 'recovery_success'
+  | 'recovery_failed'
+  | 'pipeline_start'
+  | 'pipeline_done'
+  | 'info';
+
+export interface LogEntry {
+  timestamp: string;
+  stage_id?: string;
+  type: LogType;
+  message: string;
+  details?: string;
 }
 
 export interface HistoryEntry {

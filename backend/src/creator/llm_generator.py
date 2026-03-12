@@ -32,29 +32,96 @@ Respond with ONLY the JSON array, no markdown formatting or explanation."""
 HF_MODEL = "meta-llama/Meta-Llama-3-8B-Instruct"
 
 
-def _fallback_stages(language: str) -> list[Stage]:
-    """Return a basic fallback pipeline when the LLM call fails."""
+def _fallback_stages(analysis: RepoAnalysis) -> list[Stage]:
+    """Return a smart fallback pipeline based on repo analysis when the LLM call fails."""
+    language = analysis.language
+
+    # Build install command based on what files exist
+    if analysis.has_requirements_txt:
+        install_cmd = "pip install -r requirements.txt"
+    elif analysis.package_manager == "pip":
+        install_cmd = "pip install -e . || pip install . || echo 'No installable package found'"
+    elif analysis.package_manager == "npm":
+        install_cmd = "npm install"
+    elif analysis.package_manager == "yarn":
+        install_cmd = "yarn install"
+    elif analysis.package_manager == "go":
+        install_cmd = "go mod download"
+    elif analysis.package_manager == "cargo":
+        install_cmd = "cargo fetch"
+    elif analysis.package_manager == "maven":
+        install_cmd = "mvn dependency:resolve"
+    elif analysis.package_manager == "gradle":
+        install_cmd = "./gradlew dependencies || gradle dependencies"
+    else:
+        install_cmd = "echo 'No package manager detected — skipping install'"
+
+    # Build test command
+    if analysis.test_runner == "pytest":
+        test_cmd = "python -m pytest --tb=short -q || echo 'No tests found'"
+    elif analysis.test_runner in ("jest", "vitest", "mocha"):
+        test_cmd = "npm test || echo 'No tests found'"
+    elif analysis.has_tests:
+        test_cmd = "echo 'Tests detected but no runner configured'"
+    else:
+        test_cmd = "echo 'No tests detected — skipping'"
+
+    # Build lint command
+    if language == "python":
+        lint_cmd = "flake8 . --max-line-length=120 --exclude=.venv,venv,node_modules || true"
+    elif language in ("javascript", "typescript"):
+        lint_cmd = "npx eslint . --no-error-on-unmatched-pattern || true"
+    elif language == "go":
+        lint_cmd = "go vet ./... || true"
+    elif language == "rust":
+        lint_cmd = "cargo clippy || true"
+    else:
+        lint_cmd = "echo 'No linter configured — skipping'"
+
+    # Build command
+    if language in ("javascript", "typescript"):
+        build_cmd = "npm run build || echo 'No build script — skipping'"
+    elif language == "go":
+        build_cmd = "go build ./..."
+    elif language == "rust":
+        build_cmd = "cargo build"
+    elif language == "java":
+        build_cmd = "mvn package -DskipTests || ./gradlew build -x test"
+    elif language == "python":
+        build_cmd = "python -m py_compile $(find . -name '*.py' -not -path './.venv/*' | head -20) && echo 'Build check passed'"
+    else:
+        build_cmd = "echo 'No build step configured — skipping'"
+
     return [
         Stage(
             id="install",
             agent=AgentType.BUILD,
-            command=f"echo 'Install: configure manually for {language}'",
+            command=install_cmd,
             depends_on=[],
+            timeout_seconds=120,
+        ),
+        Stage(
+            id="lint",
+            agent=AgentType.TEST,
+            command=lint_cmd,
+            depends_on=["install"],
             timeout_seconds=60,
+            critical=False,
         ),
         Stage(
             id="test",
             agent=AgentType.TEST,
-            command=f"echo 'Test: configure manually for {language}'",
+            command=test_cmd,
             depends_on=["install"],
-            timeout_seconds=60,
+            timeout_seconds=120,
+            critical=False,
         ),
         Stage(
             id="build",
             agent=AgentType.BUILD,
-            command=f"echo 'Build: configure manually for {language}'",
-            depends_on=["test"],
-            timeout_seconds=60,
+            command=build_cmd,
+            depends_on=["lint", "test"],
+            timeout_seconds=120,
         ),
     ]
 
@@ -63,7 +130,7 @@ async def generate_with_llm(analysis: RepoAnalysis, goal: str) -> list[Stage]:
     """Use Hugging Face Inference API to generate pipeline stages for unknown project types."""
     if not settings.hf_api_key:
         logger.warning("HF_API_KEY is not set — returning fallback pipeline")
-        return _fallback_stages(analysis.language)
+        return _fallback_stages(analysis)
 
     try:
         client = InferenceClient(api_key=settings.hf_api_key)
@@ -111,4 +178,4 @@ async def generate_with_llm(analysis: RepoAnalysis, goal: str) -> list[Stage]:
 
     except Exception as e:
         logger.warning("Hugging Face API call failed (%s), returning fallback pipeline", e)
-        return _fallback_stages(analysis.language)
+        return _fallback_stages(analysis)

@@ -1,7 +1,8 @@
 import { useState } from 'react';
-import { X, Terminal, Info, Clock, RotateCcw, AlertTriangle, Zap } from 'lucide-react';
+import { X, Terminal, Info, Clock, RotateCcw, AlertTriangle, Zap, ScrollText } from 'lucide-react';
 import { usePipelineContext } from '../context/PipelineContext';
 import { statusConfig, agentColors } from '../utils/statusColors';
+import type { LogType } from '../types/pipeline';
 
 const recoveryBadgeConfig: Record<string, { bg: string; text: string; border: string }> = {
   FIX_AND_RETRY: { bg: '#ecfdf5', text: '#059669', border: '#a7f3d0' },
@@ -10,10 +11,23 @@ const recoveryBadgeConfig: Record<string, { bg: string; text: string; border: st
   ABORT:         { bg: '#fef2f2', text: '#dc2626', border: '#fecaca' },
 };
 
+const logTypeColors: Record<string, { color: string; label: string }> = {
+  stage_start: { color: '#3b82f6', label: 'START' },
+  stage_success: { color: '#059669', label: 'SUCCESS' },
+  stage_failed: { color: '#dc2626', label: 'FAILED' },
+  stage_skipped: { color: '#ca8a04', label: 'SKIPPED' },
+  retry: { color: '#f59e0b', label: 'RETRY' },
+  recovery_start: { color: '#8b5cf6', label: 'HEALING' },
+  recovery_plan: { color: '#8b5cf6', label: 'PLAN' },
+  recovery_success: { color: '#059669', label: 'HEALED' },
+  recovery_failed: { color: '#dc2626', label: 'HEAL FAIL' },
+  info: { color: '#6b7280', label: 'INFO' },
+};
+
 export default function StageDetailPanel() {
-  const { currentPipeline, selectedStageId, stageStatuses, stageResults, recoveryPlans, selectStage } =
+  const { currentPipeline, selectedStageId, stageStatuses, stageResults, recoveryPlans, executionLogs, selectStage } =
     usePipelineContext();
-  const [tab, setTab] = useState<'output' | 'details'>('output');
+  const [tab, setTab] = useState<'output' | 'details' | 'logs'>('output');
 
   if (!selectedStageId || !currentPipeline) return null;
 
@@ -85,11 +99,59 @@ export default function StageDetailPanel() {
           <Info className="w-3.5 h-3.5" />
           Details
         </button>
+        <button
+          onClick={() => setTab('logs')}
+          className={`flex items-center gap-1.5 px-3 py-2.5 text-sm font-medium border-b-2 transition-colors ${
+            tab === 'logs'
+              ? 'border-accent text-accent'
+              : 'border-transparent text-gray-500 hover:text-gray-700'
+          }`}
+        >
+          <ScrollText className="w-3.5 h-3.5" />
+          Logs
+        </button>
       </div>
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-5">
-        {tab === 'output' ? (
+        {tab === 'logs' ? (
+          <div className="space-y-1">
+            {(() => {
+              const stageLogs = executionLogs.filter((l) => l.stage_id === stage.id);
+              if (stageLogs.length === 0) {
+                return (
+                  <div className="text-sm text-gray-400 text-center py-8">
+                    No log entries for this stage yet
+                  </div>
+                );
+              }
+              return stageLogs.map((entry, i) => {
+                const cfg = logTypeColors[entry.type] || logTypeColors.info;
+                return (
+                  <div key={i} className="flex items-start gap-2 py-1.5">
+                    <span
+                      className="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded flex-shrink-0 mt-0.5"
+                      style={{ backgroundColor: cfg.color + '15', color: cfg.color }}
+                    >
+                      {cfg.label}
+                    </span>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs text-gray-700 leading-relaxed">{entry.message}</p>
+                      {entry.details && (
+                        <pre className="text-[10px] font-mono bg-gray-900 text-gray-300 p-2 rounded mt-1 overflow-x-auto whitespace-pre-wrap max-h-24 overflow-y-auto">
+                          {entry.details}
+                        </pre>
+                      )}
+                    </div>
+                    <span className="text-[10px] text-gray-300 flex-shrink-0 mt-0.5">
+                      {new Date(entry.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                    </span>
+                  </div>
+                );
+              });
+            })()}
+          </div>
+        ) : tab === 'output' ? (
           <div className="space-y-3">
             {result?.stdout ? (
               <div>

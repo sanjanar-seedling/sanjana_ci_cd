@@ -18,6 +18,8 @@ export default function ExecutionControls() {
     setRecoveryPlan,
     startRegenerate,
     startEditing,
+    addLog,
+    clearLogs,
   } = usePipelineContext();
 
   const { loading, error, execute } = usePipeline();
@@ -26,7 +28,9 @@ export default function ExecutionControls() {
   const [pipelineIdForWs, setPipelineIdForWs] = useState<string | null>(null);
 
   const onWsUpdate = useCallback((update: StageUpdate) => {
-    updateStageStatus(update.stage_id, update.status);
+    if (update.stage_id) {
+      updateStageStatus(update.stage_id, update.status);
+    }
     if (update.recovery_strategy) {
       setRecoveryPlan(update.stage_id, {
         strategy: update.recovery_strategy,
@@ -34,7 +38,17 @@ export default function ExecutionControls() {
         modified_command: update.modified_command,
       });
     }
-  }, [updateStageStatus, setRecoveryPlan]);
+    // Capture log entry
+    if (update.log_type && update.log_message) {
+      addLog({
+        timestamp: new Date().toISOString(),
+        stage_id: update.stage_id || undefined,
+        type: update.log_type,
+        message: update.log_message,
+        details: update.log_tail,
+      });
+    }
+  }, [updateStageStatus, setRecoveryPlan, addLog]);
 
   useWebSocket(wsActive ? pipelineIdForWs : null, onWsUpdate);
 
@@ -54,6 +68,7 @@ export default function ExecutionControls() {
       updateStageStatus(stage.id, 'pending');
     }
 
+    clearLogs();
     startExecution();
     setElapsed(0);
     setPipelineIdForWs(currentPipeline.pipeline_id);

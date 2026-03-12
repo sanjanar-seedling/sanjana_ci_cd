@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
 import { listPipelines } from '../api/client';
-import type { PipelineSpec, StageStatus, StageResult, HistoryEntry } from '../types/pipeline';
+import type { PipelineSpec, StageStatus, StageResult, HistoryEntry, LogEntry, LogType } from '../types/pipeline';
 
 interface PipelineState {
   currentPipeline: PipelineSpec | null;
@@ -12,6 +12,7 @@ interface PipelineState {
   recoveryPlans: Map<string, { strategy: string; reason: string; modified_command?: string }>;
   isRegenerating: boolean;
   isEditing: boolean;
+  executionLogs: LogEntry[];
 }
 
 interface PipelineActions {
@@ -31,6 +32,8 @@ interface PipelineActions {
   cancelRegenerate: () => void;
   startEditing: () => void;
   stopEditing: () => void;
+  addLog: (entry: LogEntry) => void;
+  clearLogs: () => void;
 }
 
 const PipelineContext = createContext<(PipelineState & PipelineActions) | null>(null);
@@ -45,6 +48,7 @@ export function PipelineProvider({ children }: { children: React.ReactNode }) {
   const [recoveryPlans, setRecoveryPlans] = useState<PipelineState['recoveryPlans']>(new Map());
   const [isRegenerating, setIsRegenerating] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
+  const [executionLogs, setExecutionLogs] = useState<LogEntry[]>([]);
 
   // Load history from the backend on mount
   useEffect(() => {
@@ -170,6 +174,11 @@ export function PipelineProvider({ children }: { children: React.ReactNode }) {
   const startEditing = useCallback(() => setIsEditing(true), []);
   const stopEditing = useCallback(() => setIsEditing(false), []);
 
+  const addLog = useCallback((entry: LogEntry) => {
+    setExecutionLogs((prev) => [...prev, entry]);
+  }, []);
+  const clearLogs = useCallback(() => setExecutionLogs([]), []);
+
   const value: PipelineState & PipelineActions = {
     currentPipeline,
     stageStatuses,
@@ -180,6 +189,7 @@ export function PipelineProvider({ children }: { children: React.ReactNode }) {
     recoveryPlans,
     isRegenerating,
     isEditing,
+    executionLogs,
     setPipeline,
     clearPipeline,
     updateStageStatus,
@@ -196,6 +206,8 @@ export function PipelineProvider({ children }: { children: React.ReactNode }) {
     cancelRegenerate,
     startEditing,
     stopEditing,
+    addLog,
+    clearLogs,
   };
 
   return (

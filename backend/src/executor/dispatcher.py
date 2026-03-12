@@ -103,21 +103,36 @@ async def run_pipeline(
         "Starting pipeline %s with %d stages", spec.pipeline_id, len(spec.stages)
     )
 
+    await _broadcast({
+        "log_type": "pipeline_start",
+        "log_message": f"Pipeline started with {len(spec.stages)} stages",
+        "stage_id": "",
+        "status": "running",
+    })
+
     while not scheduler.is_finished():
         ready = scheduler.get_ready_stages()
 
         if not ready:
-            # No stages ready but not finished — deadlock or all remaining are blocked
             logger.warning("No ready stages but pipeline not finished — breaking")
+            await _broadcast({
+                "log_type": "info",
+                "log_message": "No stages ready to execute — pipeline stalled",
+                "stage_id": "",
+                "status": "failed",
+            })
             break
 
         logger.info("Dispatching %d stages: %s", len(ready), ready)
 
         # Broadcast running status for all ready stages
         for stage_id in ready:
+            stage = scheduler.get_stage(stage_id)
             await _broadcast({
                 "stage_id": stage_id,
                 "status": "running",
+                "log_type": "stage_start",
+                "log_message": f"Starting stage '{stage_id}' ({stage.agent.value} agent) — {stage.command[:80]}",
             })
 
         # Run all ready stages concurrently
@@ -137,10 +152,21 @@ async def run_pipeline(
                     stderr=str(result),
                 )
                 scheduler.mark_complete(stage_id, StageStatus.FAILED, error_result)
-                await _broadcast({"stage_id": stage_id, "status": "failed"})
                 stage = scheduler.get_stage(stage_id)
+                await _broadcast({
+                    "stage_id": stage_id,
+                    "status": "failed",
+                    "log_type": "stage_failed",
+                    "log_message": f"Stage '{stage_id}' crashed: {str(result)[:120]}",
+                })
                 if stage.critical:
                     scheduler.skip_dependents(stage_id)
+                    await _broadcast({
+                        "stage_id": stage_id,
+                        "status": "failed",
+                        "log_type": "info",
+                        "log_message": f"Skipping dependents of critical stage '{stage_id}'",
+                    })
                 continue
 
             if result.status == StageStatus.SUCCESS:
@@ -149,6 +175,8 @@ async def run_pipeline(
                     "stage_id": stage_id,
                     "status": "success",
                     "duration_seconds": result.duration_seconds,
+                    "log_type": "stage_success",
+                    "log_message": f"Stage '{stage_id}' succeeded in {result.duration_seconds:.1f}s",
                 })
                 continue
 
@@ -160,24 +188,44 @@ async def run_pipeline(
                 logger.info("Non-critical stage %s failed, skipping", stage_id)
                 result.status = StageStatus.SKIPPED
                 scheduler.mark_complete(stage_id, StageStatus.SKIPPED, result)
-                await _broadcast({"stage_id": stage_id, "status": "skipped"})
+                stderr_preview = (result.stderr or "")[:100]
+                await _broadcast({
+                    "stage_id": stage_id,
+                    "status": "skipped",
+                    "log_type": "stage_skipped",
+                    "log_message": f"Stage '{stage_id}' failed but is non-critical — skipped. {stderr_preview}",
+                })
                 continue
 
             # Check retry count
             if stage.retry_count > 0:
+                retries_left = stage.retry_count
                 logger.info(
                     "Retrying stage %s (%d retries remaining)",
                     stage_id,
-                    stage.retry_count,
+                    retries_left,
                 )
                 stage.retry_count -= 1
                 scheduler.mark_complete(stage_id, StageStatus.FAILED, result)
                 scheduler._statuses[stage_id] = StageStatus.PENDING
-                await _broadcast({"stage_id": stage_id, "status": "running"})
+                await _broadcast({
+                    "stage_id": stage_id,
+                    "status": "running",
+                    "log_type": "retry",
+                    "log_message": f"Retrying stage '{stage_id}' ({retries_left} retries remaining)",
+                })
                 continue
 
             # Use AI replanner for critical failures
             try:
+                await _broadcast({
+                    "stage_id": stage_id,
+                    "status": "failed",
+                    "log_type": "recovery_start",
+                    "log_message": f"Stage '{stage_id}' failed (exit code {result.exit_code}). Analyzing failure for self-healing...",
+                    "log_tail": (result.stderr or result.stdout or "")[:200],
+                })
+
                 plan = await analyze_failure(stage, result, spec)
 
                 # Broadcast recovery plan through WebSocket
@@ -187,23 +235,47 @@ async def run_pipeline(
                     "recovery_strategy": plan.strategy.value,
                     "recovery_reason": plan.reason,
                     "modified_command": plan.modified_command,
+                    "log_type": "recovery_plan",
+                    "log_message": f"Recovery plan for '{stage_id}': {plan.strategy.value} — {plan.reason}" + (f" | New command: {plan.modified_command[:80]}" if plan.modified_command else ""),
                 })
 
                 recovery_result = await execute_recovery(plan, stage, scheduler, agents)
                 if recovery_result is None:
                     scheduler.mark_complete(stage_id, StageStatus.FAILED, result)
                     scheduler.skip_dependents(stage_id)
+                    await _broadcast({
+                        "stage_id": stage_id,
+                        "status": "failed",
+                        "log_type": "recovery_failed",
+                        "log_message": f"Recovery for '{stage_id}' did not produce a result — stage failed. Skipping dependents.",
+                    })
                 elif recovery_result.status == StageStatus.SUCCESS:
                     await _broadcast({
                         "stage_id": stage_id,
                         "status": "success",
                         "duration_seconds": recovery_result.duration_seconds,
+                        "log_type": "recovery_success",
+                        "log_message": f"Self-healing succeeded for '{stage_id}' in {recovery_result.duration_seconds:.1f}s",
+                    })
+                else:
+                    scheduler.mark_complete(stage_id, StageStatus.FAILED, result)
+                    scheduler.skip_dependents(stage_id)
+                    await _broadcast({
+                        "stage_id": stage_id,
+                        "status": "failed",
+                        "log_type": "recovery_failed",
+                        "log_message": f"Recovery for '{stage_id}' failed — {(recovery_result.stderr or '')[:100]}",
                     })
             except Exception as e:
                 logger.error("Recovery failed for stage %s: %s", stage_id, e)
                 scheduler.mark_complete(stage_id, StageStatus.FAILED, result)
                 scheduler.skip_dependents(stage_id)
-                await _broadcast({"stage_id": stage_id, "status": "failed"})
+                await _broadcast({
+                    "stage_id": stage_id,
+                    "status": "failed",
+                    "log_type": "recovery_failed",
+                    "log_message": f"Recovery error for '{stage_id}': {str(e)[:120]}",
+                })
 
     all_results = scheduler.get_all_results()
     succeeded = sum(1 for r in all_results.values() if r.status == StageStatus.SUCCESS)
@@ -217,5 +289,13 @@ async def run_pipeline(
         failed,
         skipped,
     )
+
+    overall = "succeeded" if failed == 0 else "failed"
+    await _broadcast({
+        "stage_id": "",
+        "status": "success" if failed == 0 else "failed",
+        "log_type": "pipeline_done",
+        "log_message": f"Pipeline {overall}: {succeeded} succeeded, {failed} failed, {skipped} skipped",
+    })
 
     return all_results

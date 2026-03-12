@@ -6,6 +6,7 @@ import PipelineDAG from './components/PipelineDAG';
 import ExecutionControls from './components/ExecutionControls';
 import StageDetailPanel from './components/StageDetailPanel';
 import StatusBanner from './components/StatusBanner';
+import ExecutionLog from './components/ExecutionLog';
 import { agentColors } from './utils/statusColors';
 
 function PipelineInfo() {
@@ -99,12 +100,17 @@ function AppContent() {
       {!currentPipeline ? (
         <CreatePipeline />
       ) : (
-        <div className="flex flex-col h-full">
-          <PipelineInfo />
-          <ExecutionControls />
-          <StatusBanner />
-          <PipelineDAG />
-          <StageDetailPanel />
+        <div className="flex h-full">
+          {/* Main pipeline area */}
+          <div className="flex-1 flex flex-col min-w-0">
+            <PipelineInfo />
+            <ExecutionControls />
+            <StatusBanner />
+            <PipelineDAG />
+            <StageDetailPanel />
+          </div>
+          {/* Right sidebar — Execution Log */}
+          <ExecutionLog />
         </div>
       )}
     </Layout>
