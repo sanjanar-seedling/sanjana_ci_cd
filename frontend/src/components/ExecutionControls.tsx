@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { Play, Loader2, CheckCircle, XCircle } from 'lucide-react';
+import { Play, Loader2, CheckCircle, XCircle, RefreshCw, Pencil } from 'lucide-react';
 import { usePipelineContext } from '../context/PipelineContext';
 import { usePipeline } from '../hooks/usePipeline';
 import { useWebSocket } from '../hooks/useWebSocket';
@@ -15,7 +15,9 @@ export default function ExecutionControls() {
     updateStageStatus,
     setBulkResults,
     addToHistory,
-    setReplannerInfo,
+    setRecoveryPlan,
+    startRegenerate,
+    startEditing,
   } = usePipelineContext();
 
   const { loading, error, execute } = usePipeline();
@@ -26,13 +28,13 @@ export default function ExecutionControls() {
   const onWsUpdate = useCallback((update: StageUpdate) => {
     updateStageStatus(update.stage_id, update.status);
     if (update.recovery_strategy) {
-      setReplannerInfo({
-        stageId: update.stage_id,
+      setRecoveryPlan(update.stage_id, {
         strategy: update.recovery_strategy,
-        reason: update.recovery_reason,
+        reason: update.recovery_reason ?? '',
+        modified_command: update.modified_command,
       });
     }
-  }, [updateStageStatus, setReplannerInfo]);
+  }, [updateStageStatus, setRecoveryPlan]);
 
   useWebSocket(wsActive ? pipelineIdForWs : null, onWsUpdate);
 
@@ -57,7 +59,6 @@ export default function ExecutionControls() {
     setPipelineIdForWs(currentPipeline.pipeline_id);
     setWsActive(true);
 
-    // Mark all as running initially (the backend will process them)
     const results = await execute(currentPipeline.pipeline_id);
 
     setWsActive(false);
@@ -87,7 +88,7 @@ export default function ExecutionControls() {
   const pipelineSuccess = allDone && failed === 0;
 
   return (
-    <div className="bg-white border-b border-gray-200 px-5 py-3 flex items-center gap-4 flex-shrink-0">
+    <div className="bg-white border-b border-gray-200 px-5 py-3 flex items-center gap-3 flex-shrink-0">
       {/* Execute button */}
       <button
         onClick={handleExecute}
@@ -105,6 +106,28 @@ export default function ExecutionControls() {
             Execute Pipeline
           </>
         )}
+      </button>
+
+      {/* Regenerate button */}
+      <button
+        onClick={startRegenerate}
+        disabled={isExecuting || loading}
+        className="flex items-center gap-1.5 px-3 py-2 bg-blue-50 hover:bg-blue-100 disabled:bg-gray-100 disabled:text-gray-400 text-blue-700 text-sm font-medium rounded-lg transition-colors"
+        title="Re-analyze repo and generate a new pipeline"
+      >
+        <RefreshCw className="w-3.5 h-3.5" />
+        Regenerate
+      </button>
+
+      {/* Edit button */}
+      <button
+        onClick={startEditing}
+        disabled={isExecuting || loading}
+        className="flex items-center gap-1.5 px-3 py-2 bg-amber-50 hover:bg-amber-100 disabled:bg-gray-100 disabled:text-gray-400 text-amber-700 text-sm font-medium rounded-lg transition-colors"
+        title="Edit stage commands and settings"
+      >
+        <Pencil className="w-3.5 h-3.5" />
+        Edit
       </button>
 
       {/* Progress */}

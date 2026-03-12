@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Loader2, Rocket, Code2 } from 'lucide-react';
+import { Loader2, Rocket, Code2, Container, Tag } from 'lucide-react';
 import { usePipeline } from '../hooks/usePipeline';
 import { usePipelineContext } from '../context/PipelineContext';
 
@@ -12,9 +12,15 @@ const LANGUAGES = [
   { name: 'Rust', color: 'bg-orange-100 text-orange-800' },
 ];
 
-export default function CreatePipeline() {
-  const [repoUrl, setRepoUrl] = useState('');
-  const [goal, setGoal] = useState('');
+interface CreatePipelineProps {
+  prefill?: { repoUrl: string; goal: string; name: string; useDocker: boolean };
+}
+
+export default function CreatePipeline({ prefill }: CreatePipelineProps) {
+  const [repoUrl, setRepoUrl] = useState(prefill?.repoUrl ?? '');
+  const [goal, setGoal] = useState(prefill?.goal ?? '');
+  const [name, setName] = useState(prefill?.name ?? '');
+  const [useDocker, setUseDocker] = useState(prefill?.useDocker ?? false);
   const { loading, error, generate, setError } = usePipeline();
   const { setPipeline } = usePipelineContext();
 
@@ -22,7 +28,7 @@ export default function CreatePipeline() {
     e.preventDefault();
     if (!repoUrl.trim() || !goal.trim()) return;
     setError(null);
-    const spec = await generate(repoUrl.trim(), goal.trim());
+    const spec = await generate(repoUrl.trim(), goal.trim(), useDocker, name.trim());
     if (spec) {
       setPipeline(spec);
     }
@@ -36,12 +42,36 @@ export default function CreatePipeline() {
           <div className="w-16 h-16 rounded-2xl bg-accent/10 flex items-center justify-center mx-auto mb-4">
             <Rocket className="w-8 h-8 text-accent" />
           </div>
-          <h2 className="text-2xl font-bold text-gray-900">Create Pipeline</h2>
-          <p className="text-gray-500 mt-1">Analyze a repo and generate a CI/CD pipeline</p>
+          <h2 className="text-2xl font-bold text-gray-900">
+            {prefill ? 'Regenerate Pipeline' : 'Create Pipeline'}
+          </h2>
+          <p className="text-gray-500 mt-1">
+            {prefill
+              ? 'Re-analyze the repo and generate a fresh pipeline'
+              : 'Analyze a repo and generate a CI/CD pipeline'}
+          </p>
         </div>
 
         {/* Form */}
         <form onSubmit={handleSubmit} className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 space-y-5">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">
+              Pipeline Name
+              <span className="text-gray-400 font-normal ml-1">(optional)</span>
+            </label>
+            <div className="relative">
+              <Tag className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+              <input
+                type="text"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="e.g. Flask CI, Express Deploy"
+                className="w-full pl-9 pr-3.5 py-2.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-accent/30 focus:border-accent outline-none transition-shadow"
+                disabled={loading}
+              />
+            </div>
+          </div>
+
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1.5">
               Repository URL
@@ -70,6 +100,24 @@ export default function CreatePipeline() {
             />
           </div>
 
+          <label className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg cursor-pointer hover:bg-gray-100 transition-colors">
+            <div className="relative">
+              <input
+                type="checkbox"
+                checked={useDocker}
+                onChange={(e) => setUseDocker(e.target.checked)}
+                disabled={loading}
+                className="sr-only peer"
+              />
+              <div className="w-9 h-5 bg-gray-300 rounded-full peer-checked:bg-accent transition-colors" />
+              <div className="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform peer-checked:translate-x-4" />
+            </div>
+            <div className="flex items-center gap-2">
+              <Container className="w-4 h-4 text-gray-500" />
+              <span className="text-sm font-medium text-gray-700">Run in Docker containers</span>
+            </div>
+          </label>
+
           {error && (
             <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
               {error}
@@ -86,6 +134,8 @@ export default function CreatePipeline() {
                 <Loader2 className="w-4 h-4 animate-spin" />
                 Analyzing repository...
               </>
+            ) : prefill ? (
+              'Regenerate Pipeline'
             ) : (
               'Generate Pipeline'
             )}
@@ -93,22 +143,24 @@ export default function CreatePipeline() {
         </form>
 
         {/* Supported Languages */}
-        <div className="mt-6 text-center">
-          <div className="flex items-center justify-center gap-1.5 text-xs text-gray-400 mb-3">
-            <Code2 className="w-3.5 h-3.5" />
-            Supported Languages
+        {!prefill && (
+          <div className="mt-6 text-center">
+            <div className="flex items-center justify-center gap-1.5 text-xs text-gray-400 mb-3">
+              <Code2 className="w-3.5 h-3.5" />
+              Supported Languages
+            </div>
+            <div className="flex flex-wrap justify-center gap-2">
+              {LANGUAGES.map((lang) => (
+                <span
+                  key={lang.name}
+                  className={`px-2.5 py-1 rounded-full text-xs font-medium ${lang.color}`}
+                >
+                  {lang.name}
+                </span>
+              ))}
+            </div>
           </div>
-          <div className="flex flex-wrap justify-center gap-2">
-            {LANGUAGES.map((lang) => (
-              <span
-                key={lang.name}
-                className={`px-2.5 py-1 rounded-full text-xs font-medium ${lang.color}`}
-              >
-                {lang.name}
-              </span>
-            ))}
-          </div>
-        </div>
+        )}
       </div>
     </div>
   );

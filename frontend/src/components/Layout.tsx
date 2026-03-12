@@ -53,6 +53,14 @@ export default function Layout({ children }: { children: React.ReactNode }) {
               New Pipeline
             </button>
             <span className="mx-3 text-gray-300">|</span>
+            {currentPipeline.name && (
+              <>
+                <span className="text-sm font-medium text-gray-800 truncate">
+                  {currentPipeline.name}
+                </span>
+                <span className="mx-3 text-gray-300">|</span>
+              </>
+            )}
             <span className="text-sm text-gray-600 truncate">
               {currentPipeline.repo_url}
             </span>

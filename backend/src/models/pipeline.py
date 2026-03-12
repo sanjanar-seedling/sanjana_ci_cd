@@ -30,15 +30,24 @@ class RepoAnalysis(BaseModel):
     framework: Optional[str] = None
     package_manager: str
     has_dockerfile: bool = False
+    has_requirements_txt: bool = False
+    has_yarn_lock: bool = False
+    has_package_lock: bool = False
     has_tests: bool = False
     test_runner: Optional[str] = None
     is_monorepo: bool = False
+    deploy_target: Optional[str] = None  # e.g., "aws", "gcp", "azure", "docker", "heroku", "kubernetes", "staging", "production"
+    available_scripts: list[str] = []  # npm/yarn scripts found in package.json
+    has_test_extras: bool = False  # Python: has [dev], [test], or [testing] extras
 
 
 class PipelineSpec(BaseModel):
     pipeline_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    name: str = ""
     repo_url: str = ""
     goal: str = ""
     created_at: datetime = Field(default_factory=datetime.utcnow)
     analysis: RepoAnalysis
     stages: list[Stage]
+    work_dir: str = ""
+    use_docker: bool = False

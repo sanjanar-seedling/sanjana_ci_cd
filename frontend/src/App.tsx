@@ -1,6 +1,7 @@
 import { usePipelineContext } from './context/PipelineContext';
 import Layout from './components/Layout';
 import CreatePipeline from './components/CreatePipeline';
+import EditPipeline from './components/EditPipeline';
 import PipelineDAG from './components/PipelineDAG';
 import ExecutionControls from './components/ExecutionControls';
 import StageDetailPanel from './components/StageDetailPanel';
@@ -16,6 +17,15 @@ function PipelineInfo() {
   return (
     <div className="bg-white border-b border-gray-200 px-5 py-3 flex items-center gap-6 flex-shrink-0">
       <div className="flex items-center gap-4 flex-1 min-w-0">
+        {currentPipeline.name && (
+          <>
+            <div className="min-w-0">
+              <div className="text-xs text-gray-400 mb-0.5">Name</div>
+              <div className="text-sm font-semibold text-gray-900 truncate">{currentPipeline.name}</div>
+            </div>
+            <div className="h-8 w-px bg-gray-200" />
+          </>
+        )}
         <div className="min-w-0">
           <div className="text-xs text-gray-400 mb-0.5">Goal</div>
           <div className="text-sm font-medium text-gray-800 truncate">{currentPipeline.goal}</div>
@@ -57,7 +67,32 @@ function PipelineInfo() {
 }
 
 function AppContent() {
-  const { currentPipeline } = usePipelineContext();
+  const { currentPipeline, isRegenerating, isEditing } = usePipelineContext();
+
+  // Show regenerate form (pre-filled with current pipeline's repo/goal/name)
+  if (isRegenerating && currentPipeline) {
+    return (
+      <Layout>
+        <CreatePipeline
+          prefill={{
+            repoUrl: currentPipeline.repo_url,
+            goal: currentPipeline.goal,
+            name: currentPipeline.name,
+            useDocker: false,
+          }}
+        />
+      </Layout>
+    );
+  }
+
+  // Show edit mode
+  if (isEditing && currentPipeline) {
+    return (
+      <Layout>
+        <EditPipeline />
+      </Layout>
+    );
+  }
 
   return (
     <Layout>

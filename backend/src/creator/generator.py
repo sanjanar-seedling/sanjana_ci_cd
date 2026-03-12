@@ -3,8 +3,11 @@ import logging
 import networkx as nx
 
 from src.creator.llm_generator import generate_with_llm
+from src.creator.templates.go import generate_go_pipeline
+from src.creator.templates.java import generate_java_pipeline
 from src.creator.templates.nodejs import generate_nodejs_pipeline
 from src.creator.templates.python_tmpl import generate_python_pipeline
+from src.creator.templates.rust import generate_rust_pipeline
 from src.models.pipeline import PipelineSpec, RepoAnalysis, Stage
 
 logger = logging.getLogger(__name__)
@@ -13,6 +16,9 @@ TEMPLATE_MAP: dict[str, callable] = {
     "javascript": generate_nodejs_pipeline,
     "typescript": generate_nodejs_pipeline,
     "python": generate_python_pipeline,
+    "go": generate_go_pipeline,
+    "java": generate_java_pipeline,
+    "rust": generate_rust_pipeline,
 }
 
 

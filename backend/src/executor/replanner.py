@@ -1,7 +1,7 @@
 import json
 import logging
 
-from google import genai
+from huggingface_hub import InferenceClient
 
 from src.config import settings
 from src.executor.scheduler import DAGScheduler
@@ -27,68 +27,85 @@ Guidelines:
 
 Respond with ONLY the JSON object, no markdown or explanation."""
 
+HF_MODEL = "meta-llama/Meta-Llama-3-8B-Instruct"
+
 
 async def analyze_failure(
     stage: Stage, result: StageResult, spec: PipelineSpec
 ) -> RecoveryPlan:
-    """Use Gemini to analyze a stage failure and recommend a recovery strategy."""
-    client = genai.Client(api_key=settings.gemini_api_key)
-
-    # Truncate stderr to last 200 lines
-    stderr_lines = result.stderr.strip().split("\n")
-    truncated_stderr = "\n".join(stderr_lines[-200:])
-
-    user_message = (
-        f"Failed stage details:\n"
-        f"- Stage ID: {stage.id}\n"
-        f"- Agent type: {stage.agent.value}\n"
-        f"- Command: {stage.command}\n"
-        f"- Exit code: {result.exit_code}\n"
-        f"- Duration: {result.duration_seconds:.1f}s\n\n"
-        f"Stderr (last 200 lines):\n{truncated_stderr}\n\n"
-        f"Pipeline goal: {spec.goal}\n"
-        f"Stage is critical: {stage.critical}\n"
-        f"Retry count remaining: {stage.retry_count}"
-    )
-
-    logger.info("Calling Gemini API for failure analysis of stage %s", stage.id)
-
-    response = await client.aio.models.generate_content(
-        model="gemini-2.0-flash",
-        contents=user_message,
-        config=genai.types.GenerateContentConfig(
-            system_instruction=SYSTEM_PROMPT,
-            max_output_tokens=1024,
-        ),
-    )
-
-    response_text = response.text.strip()
-
-    # Strip markdown code fences if present
-    if response_text.startswith("```"):
-        lines = response_text.split("\n")
-        lines = lines[1:]
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        response_text = "\n".join(lines)
-
-    try:
-        plan_data = json.loads(response_text)
-    except json.JSONDecodeError as e:
-        logger.error("Failed to parse recovery plan JSON: %s", e)
+    """Use Hugging Face Inference API to analyze a stage failure and recommend a recovery strategy."""
+    if not settings.hf_api_key:
+        logger.warning("HF_API_KEY is not set — returning ABORT")
         return RecoveryPlan(
             strategy=RecoveryStrategy.ABORT,
-            reason=f"Failed to parse AI recovery suggestion: {e}",
+            reason="HF_API_KEY not configured, cannot analyze failure",
         )
 
-    plan = RecoveryPlan(**plan_data)
-    logger.info(
-        "Recovery plan for stage %s: strategy=%s reason=%s",
-        stage.id,
-        plan.strategy.value,
-        plan.reason,
-    )
-    return plan
+    try:
+        client = InferenceClient(api_key=settings.hf_api_key)
+
+        # Truncate stderr to last 200 lines
+        stderr_lines = result.stderr.strip().split("\n")
+        truncated_stderr = "\n".join(stderr_lines[-200:])
+
+        user_message = (
+            f"Failed stage details:\n"
+            f"- Stage ID: {stage.id}\n"
+            f"- Agent type: {stage.agent.value}\n"
+            f"- Command: {stage.command}\n"
+            f"- Exit code: {result.exit_code}\n"
+            f"- Duration: {result.duration_seconds:.1f}s\n\n"
+            f"Stderr (last 200 lines):\n{truncated_stderr}\n\n"
+            f"Pipeline goal: {spec.goal}\n"
+            f"Stage is critical: {stage.critical}\n"
+            f"Retry count remaining: {stage.retry_count}"
+        )
+
+        logger.info("Calling Hugging Face API for failure analysis of stage %s", stage.id)
+
+        response = client.chat.completions.create(
+            model=HF_MODEL,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_message},
+            ],
+            max_tokens=1024,
+        )
+
+        response_text = response.choices[0].message.content.strip()
+
+        # Strip markdown code fences if present
+        if response_text.startswith("```"):
+            lines = response_text.split("\n")
+            lines = lines[1:]
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            response_text = "\n".join(lines)
+
+        try:
+            plan_data = json.loads(response_text)
+        except json.JSONDecodeError as e:
+            logger.error("Failed to parse recovery plan JSON: %s", e)
+            return RecoveryPlan(
+                strategy=RecoveryStrategy.ABORT,
+                reason=f"Failed to parse AI recovery suggestion: {e}",
+            )
+
+        plan = RecoveryPlan(**plan_data)
+        logger.info(
+            "Recovery plan for stage %s: strategy=%s reason=%s",
+            stage.id,
+            plan.strategy.value,
+            plan.reason,
+        )
+        return plan
+
+    except Exception as e:
+        logger.warning("Hugging Face API call failed (%s), returning ABORT strategy", e)
+        return RecoveryPlan(
+            strategy=RecoveryStrategy.ABORT,
+            reason="LLM unavailable",
+        )
 
 
 async def execute_recovery(

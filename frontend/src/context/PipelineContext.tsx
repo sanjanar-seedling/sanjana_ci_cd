@@ -1,4 +1,5 @@
-import React, { createContext, useContext, useState, useCallback } from 'react';
+import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
+import { listPipelines } from '../api/client';
 import type { PipelineSpec, StageStatus, StageResult, HistoryEntry } from '../types/pipeline';
 
 interface PipelineState {
@@ -8,7 +9,9 @@ interface PipelineState {
   isExecuting: boolean;
   executionHistory: HistoryEntry[];
   selectedStageId: string | null;
-  replannerInfo: { stageId: string; strategy?: string; reason?: string } | null;
+  recoveryPlans: Map<string, { strategy: string; reason: string; modified_command?: string }>;
+  isRegenerating: boolean;
+  isEditing: boolean;
 }
 
 interface PipelineActions {
@@ -20,9 +23,14 @@ interface PipelineActions {
   startExecution: () => void;
   stopExecution: () => void;
   addToHistory: (entry: HistoryEntry) => void;
+  removeFromHistory: (pipelineId: string) => void;
   selectStage: (stageId: string | null) => void;
-  setReplannerInfo: (info: PipelineState['replannerInfo']) => void;
+  setRecoveryPlan: (stageId: string, plan: { strategy: string; reason: string; modified_command?: string }) => void;
   loadFromHistory: (entry: HistoryEntry) => void;
+  startRegenerate: () => void;
+  cancelRegenerate: () => void;
+  startEditing: () => void;
+  stopEditing: () => void;
 }
 
 const PipelineContext = createContext<(PipelineState & PipelineActions) | null>(null);
@@ -34,7 +42,18 @@ export function PipelineProvider({ children }: { children: React.ReactNode }) {
   const [isExecuting, setIsExecuting] = useState(false);
   const [executionHistory, setExecutionHistory] = useState<HistoryEntry[]>([]);
   const [selectedStageId, setSelectedStageId] = useState<string | null>(null);
-  const [replannerInfo, setReplannerInfo] = useState<PipelineState['replannerInfo']>(null);
+  const [recoveryPlans, setRecoveryPlans] = useState<PipelineState['recoveryPlans']>(new Map());
+  const [isRegenerating, setIsRegenerating] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+
+  // Load history from the backend on mount
+  useEffect(() => {
+    listPipelines().then((entries) => {
+      if (entries.length > 0) {
+        setExecutionHistory(entries);
+      }
+    }).catch(() => {});
+  }, []);
 
   const setPipeline = useCallback((spec: PipelineSpec) => {
     setCurrentPipeline(spec);
@@ -45,7 +64,9 @@ export function PipelineProvider({ children }: { children: React.ReactNode }) {
     setStageStatuses(statuses);
     setStageResults(new Map());
     setSelectedStageId(null);
-    setReplannerInfo(null);
+    setRecoveryPlans(new Map());
+    setIsRegenerating(false);
+    setIsEditing(false);
   }, []);
 
   const clearPipeline = useCallback(() => {
@@ -54,7 +75,9 @@ export function PipelineProvider({ children }: { children: React.ReactNode }) {
     setStageResults(new Map());
     setIsExecuting(false);
     setSelectedStageId(null);
-    setReplannerInfo(null);
+    setRecoveryPlans(new Map());
+    setIsRegenerating(false);
+    setIsEditing(false);
   }, []);
 
   const updateStageStatus = useCallback((stageId: string, status: StageStatus) => {
@@ -102,8 +125,21 @@ export function PipelineProvider({ children }: { children: React.ReactNode }) {
     setExecutionHistory((prev) => [entry, ...prev]);
   }, []);
 
+  const removeFromHistory = useCallback((pipelineId: string) => {
+    setExecutionHistory((prev) => prev.filter((e) => e.pipeline.pipeline_id !== pipelineId));
+    setCurrentPipeline((cur) => (cur?.pipeline_id === pipelineId ? null : cur));
+  }, []);
+
   const selectStage = useCallback((stageId: string | null) => {
     setSelectedStageId(stageId);
+  }, []);
+
+  const setRecoveryPlan = useCallback((stageId: string, plan: { strategy: string; reason: string; modified_command?: string }) => {
+    setRecoveryPlans((prev) => {
+      const next = new Map(prev);
+      next.set(stageId, plan);
+      return next;
+    });
   }, []);
 
   const loadFromHistory = useCallback((entry: HistoryEntry) => {
@@ -124,8 +160,15 @@ export function PipelineProvider({ children }: { children: React.ReactNode }) {
     setStageResults(results);
     setIsExecuting(false);
     setSelectedStageId(null);
-    setReplannerInfo(null);
+    setRecoveryPlans(new Map());
+    setIsRegenerating(false);
+    setIsEditing(false);
   }, []);
+
+  const startRegenerate = useCallback(() => setIsRegenerating(true), []);
+  const cancelRegenerate = useCallback(() => setIsRegenerating(false), []);
+  const startEditing = useCallback(() => setIsEditing(true), []);
+  const stopEditing = useCallback(() => setIsEditing(false), []);
 
   const value: PipelineState & PipelineActions = {
     currentPipeline,
@@ -134,7 +177,9 @@ export function PipelineProvider({ children }: { children: React.ReactNode }) {
     isExecuting,
     executionHistory,
     selectedStageId,
-    replannerInfo,
+    recoveryPlans,
+    isRegenerating,
+    isEditing,
     setPipeline,
     clearPipeline,
     updateStageStatus,
@@ -143,9 +188,14 @@ export function PipelineProvider({ children }: { children: React.ReactNode }) {
     startExecution,
     stopExecution,
     addToHistory,
+    removeFromHistory,
     selectStage,
-    setReplannerInfo,
+    setRecoveryPlan,
     loadFromHistory,
+    startRegenerate,
+    cancelRegenerate,
+    startEditing,
+    stopEditing,
   };
 
   return (

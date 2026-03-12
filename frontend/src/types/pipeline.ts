@@ -25,6 +25,7 @@ export interface RepoAnalysis {
 
 export interface PipelineSpec {
   pipeline_id: string;
+  name: string;
   repo_url: string;
   goal: string;
   created_at: string;
@@ -50,6 +51,7 @@ export interface StageUpdate {
   log_tail?: string;
   recovery_strategy?: string;
   recovery_reason?: string;
+  modified_command?: string;
 }
 
 export interface HistoryEntry {

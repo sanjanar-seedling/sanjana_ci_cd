@@ -1,10 +1,17 @@
 import { useState } from 'react';
-import { X, Terminal, Info, Clock, RotateCcw, AlertTriangle } from 'lucide-react';
+import { X, Terminal, Info, Clock, RotateCcw, AlertTriangle, Zap } from 'lucide-react';
 import { usePipelineContext } from '../context/PipelineContext';
 import { statusConfig, agentColors } from '../utils/statusColors';
 
+const recoveryBadgeConfig: Record<string, { bg: string; text: string; border: string }> = {
+  FIX_AND_RETRY: { bg: '#ecfdf5', text: '#059669', border: '#a7f3d0' },
+  SKIP_STAGE:    { bg: '#fefce8', text: '#ca8a04', border: '#fde68a' },
+  ROLLBACK:      { bg: '#fff7ed', text: '#ea580c', border: '#fed7aa' },
+  ABORT:         { bg: '#fef2f2', text: '#dc2626', border: '#fecaca' },
+};
+
 export default function StageDetailPanel() {
-  const { currentPipeline, selectedStageId, stageStatuses, stageResults, selectStage } =
+  const { currentPipeline, selectedStageId, stageStatuses, stageResults, recoveryPlans, selectStage } =
     usePipelineContext();
   const [tab, setTab] = useState<'output' | 'details'>('output');
 
@@ -17,6 +24,7 @@ export default function StageDetailPanel() {
   const result = stageResults.get(stage.id);
   const config = statusConfig[status];
   const agentColor = agentColors[stage.agent];
+  const recovery = recoveryPlans.get(stage.id);
 
   return (
     <div className="fixed top-0 right-0 h-full w-[420px] bg-white border-l border-gray-200 shadow-xl z-50 flex flex-col animate-in slide-in-from-right">
@@ -113,6 +121,40 @@ export default function StageDetailPanel() {
               <div className="flex items-center gap-2 text-sm text-red-600 bg-red-50 px-3 py-2 rounded-lg">
                 <AlertTriangle className="w-4 h-4" />
                 Exit code: {result.exit_code}
+              </div>
+            )}
+
+            {recovery && (
+              <div className="border border-gray-200 rounded-lg overflow-hidden">
+                <div className="flex items-center gap-2 px-3 py-2 bg-gray-50 border-b border-gray-200">
+                  <Zap className="w-3.5 h-3.5 text-gray-500" />
+                  <span className="text-xs font-medium text-gray-600 uppercase tracking-wider">Recovery Plan</span>
+                </div>
+                <div className="p-3 space-y-2">
+                  <div className="flex items-center gap-2">
+                    <span
+                      className="text-xs font-semibold px-2.5 py-1 rounded-full"
+                      style={{
+                        backgroundColor: (recoveryBadgeConfig[recovery.strategy] ?? recoveryBadgeConfig.ABORT).bg,
+                        color: (recoveryBadgeConfig[recovery.strategy] ?? recoveryBadgeConfig.ABORT).text,
+                        border: `1px solid ${(recoveryBadgeConfig[recovery.strategy] ?? recoveryBadgeConfig.ABORT).border}`,
+                      }}
+                    >
+                      {recovery.strategy.replace(/_/g, ' ')}
+                    </span>
+                  </div>
+                  <p className="text-sm text-gray-700">{recovery.reason}</p>
+                  {recovery.modified_command && (
+                    <div>
+                      <label className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1 block">
+                        Modified Command
+                      </label>
+                      <pre className="bg-gray-900 text-yellow-300 text-xs font-mono p-3 rounded-lg overflow-x-auto whitespace-pre-wrap">
+                        {recovery.modified_command}
+                      </pre>
+                    </div>
+                  )}
+                </div>
               </div>
             )}
           </div>

@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from typing import Callable, Awaitable
 
 from src.executor.agents import (
     BuildAgent,
@@ -8,6 +9,7 @@ from src.executor.agents import (
     TestAgent,
     VerifyAgent,
 )
+from src.executor.docker_runner import run_in_docker
 from src.executor.replanner import analyze_failure, execute_recovery
 from src.executor.scheduler import DAGScheduler
 from src.models.messages import StageRequest, StageResult, StageStatus
@@ -29,11 +31,32 @@ async def _execute_stage(
     scheduler: DAGScheduler,
     agents: dict,
     working_dir: str,
+    use_docker: bool = False,
+    language: str = "",
 ) -> StageResult:
     """Execute a single stage using the appropriate agent."""
     stage = scheduler.get_stage(stage_id)
-    agent = agents.get(stage.agent)
 
+    scheduler.mark_running(stage_id)
+
+    # Docker execution path
+    if use_docker:
+        result = await run_in_docker(
+            command=stage.command,
+            work_dir=working_dir,
+            language=language,
+            timeout=stage.timeout_seconds,
+            env_vars=stage.env_vars or None,
+        )
+        # If Docker fails (not installed), fall back to local execution
+        if result.status == StageStatus.FAILED and "Docker not installed" in result.stderr:
+            logger.warning("Docker unavailable, falling back to local execution for stage %s", stage_id)
+        else:
+            result.stage_id = stage_id
+            return result
+
+    # Local execution path
+    agent = agents.get(stage.agent)
     if not agent:
         logger.error("No agent for type %s", stage.agent)
         return StageResult(
@@ -41,8 +64,6 @@ async def _execute_stage(
             status=StageStatus.FAILED,
             stderr=f"No agent registered for type {stage.agent}",
         )
-
-    scheduler.mark_running(stage_id)
 
     request = StageRequest(
         stage_id=stage_id,
@@ -57,7 +78,9 @@ async def _execute_stage(
 
 
 async def run_pipeline(
-    spec: PipelineSpec, working_dir: str = "."
+    spec: PipelineSpec,
+    working_dir: str = ".",
+    on_update: Callable[[dict], Awaitable[None]] | None = None,
 ) -> dict[str, StageResult]:
     """Execute a full pipeline using DAG-based scheduling.
 
@@ -66,6 +89,15 @@ async def run_pipeline(
     """
     scheduler = DAGScheduler(spec)
     agents = {agent_type: cls() for agent_type, cls in AGENT_MAP.items()}
+    use_docker = spec.use_docker
+    language = spec.analysis.language if spec.analysis else ""
+
+    if use_docker:
+        logger.info("Docker execution enabled for pipeline %s", spec.pipeline_id)
+
+    async def _broadcast(data: dict) -> None:
+        if on_update:
+            await on_update(data)
 
     logger.info(
         "Starting pipeline %s with %d stages", spec.pipeline_id, len(spec.stages)
@@ -81,9 +113,16 @@ async def run_pipeline(
 
         logger.info("Dispatching %d stages: %s", len(ready), ready)
 
+        # Broadcast running status for all ready stages
+        for stage_id in ready:
+            await _broadcast({
+                "stage_id": stage_id,
+                "status": "running",
+            })
+
         # Run all ready stages concurrently
         tasks = [
-            _execute_stage(stage_id, scheduler, agents, working_dir)
+            _execute_stage(stage_id, scheduler, agents, working_dir, use_docker, language)
             for stage_id in ready
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -98,6 +137,7 @@ async def run_pipeline(
                     stderr=str(result),
                 )
                 scheduler.mark_complete(stage_id, StageStatus.FAILED, error_result)
+                await _broadcast({"stage_id": stage_id, "status": "failed"})
                 stage = scheduler.get_stage(stage_id)
                 if stage.critical:
                     scheduler.skip_dependents(stage_id)
@@ -105,6 +145,11 @@ async def run_pipeline(
 
             if result.status == StageStatus.SUCCESS:
                 scheduler.mark_complete(stage_id, StageStatus.SUCCESS, result)
+                await _broadcast({
+                    "stage_id": stage_id,
+                    "status": "success",
+                    "duration_seconds": result.duration_seconds,
+                })
                 continue
 
             # Stage failed — handle recovery
@@ -115,6 +160,7 @@ async def run_pipeline(
                 logger.info("Non-critical stage %s failed, skipping", stage_id)
                 result.status = StageStatus.SKIPPED
                 scheduler.mark_complete(stage_id, StageStatus.SKIPPED, result)
+                await _broadcast({"stage_id": stage_id, "status": "skipped"})
                 continue
 
             # Check retry count
@@ -125,23 +171,39 @@ async def run_pipeline(
                     stage.retry_count,
                 )
                 stage.retry_count -= 1
-                # Re-queue by keeping status as PENDING
                 scheduler.mark_complete(stage_id, StageStatus.FAILED, result)
-                # Reset to pending for retry
                 scheduler._statuses[stage_id] = StageStatus.PENDING
+                await _broadcast({"stage_id": stage_id, "status": "running"})
                 continue
 
             # Use AI replanner for critical failures
             try:
                 plan = await analyze_failure(stage, result, spec)
+
+                # Broadcast recovery plan through WebSocket
+                await _broadcast({
+                    "stage_id": stage_id,
+                    "status": "failed",
+                    "recovery_strategy": plan.strategy.value,
+                    "recovery_reason": plan.reason,
+                    "modified_command": plan.modified_command,
+                })
+
                 recovery_result = await execute_recovery(plan, stage, scheduler, agents)
                 if recovery_result is None:
                     scheduler.mark_complete(stage_id, StageStatus.FAILED, result)
                     scheduler.skip_dependents(stage_id)
+                elif recovery_result.status == StageStatus.SUCCESS:
+                    await _broadcast({
+                        "stage_id": stage_id,
+                        "status": "success",
+                        "duration_seconds": recovery_result.duration_seconds,
+                    })
             except Exception as e:
                 logger.error("Recovery failed for stage %s: %s", stage_id, e)
                 scheduler.mark_complete(stage_id, StageStatus.FAILED, result)
                 scheduler.skip_dependents(stage_id)
+                await _broadcast({"stage_id": stage_id, "status": "failed"})
 
     all_results = scheduler.get_all_results()
     succeeded = sum(1 for r in all_results.values() if r.status == StageStatus.SUCCESS)

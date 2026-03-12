@@ -39,37 +39,47 @@ PACKAGE_MANAGER_MAP = {
     "Gemfile": "bundler",
 }
 
-JS_FRAMEWORKS = {
-    "react": "react",
-    "react-dom": "react",
-    "next": "next",
-    "express": "express",
-    "vue": "vue",
-    "@angular/core": "angular",
-}
+# Ordered by priority — check more specific frameworks first
+JS_FRAMEWORK_PRIORITY = [
+    ("next", "nextjs"),
+    ("@nestjs/core", "nestjs"),
+    ("@angular/core", "angular"),
+    ("svelte", "svelte"),
+    ("vue", "vue"),
+    ("react", "react"),
+    ("express", "express"),
+    ("fastify", "fastify"),
+    ("koa", "koa"),
+    ("@hapi/hapi", "hapi"),
+    ("hapi", "hapi"),
+]
 
-JS_TEST_RUNNERS = ["jest", "mocha", "vitest", "ava", "jasmine"]
+JS_TEST_RUNNERS = ["jest", "mocha", "vitest", "jasmine", "ava"]
 
-PYTHON_FRAMEWORKS = ["django", "flask", "fastapi"]
+PYTHON_FRAMEWORKS = ["django", "flask", "fastapi", "streamlit", "tornado"]
+
+JAVA_FRAMEWORKS = ["spring-boot", "quarkus", "micronaut"]
+
+RUBY_FRAMEWORKS = {"rails": "rails", "sinatra": "sinatra"}
 
 
-def _detect_js_details(repo_path: Path) -> tuple[str | None, str | None]:
-    """Detect JavaScript framework and test runner from package.json."""
+def _detect_js_details(repo_path: Path) -> tuple[str | None, str | None, list[str]]:
+    """Detect JavaScript framework, test runner, and available scripts from package.json."""
     pkg_path = repo_path / "package.json"
     if not pkg_path.exists():
-        return None, None
+        return None, None, []
 
     try:
         data = json.loads(pkg_path.read_text())
     except (json.JSONDecodeError, OSError):
-        return None, None
+        return None, None, []
 
     framework = None
     all_deps = {}
     all_deps.update(data.get("dependencies", {}))
     all_deps.update(data.get("devDependencies", {}))
 
-    for dep, fw_name in JS_FRAMEWORKS.items():
+    for dep, fw_name in JS_FRAMEWORK_PRIORITY:
         if dep in all_deps:
             framework = fw_name
             break
@@ -77,11 +87,21 @@ def _detect_js_details(repo_path: Path) -> tuple[str | None, str | None]:
     test_runner = None
     dev_deps = data.get("devDependencies", {})
     for runner in JS_TEST_RUNNERS:
-        if runner in dev_deps or runner in data.get("dependencies", {}):
+        if runner in dev_deps:
             test_runner = runner
             break
 
-    return framework, test_runner
+    # Fallback: check the "test" script for runner names
+    if test_runner is None:
+        test_script = data.get("scripts", {}).get("test", "")
+        for runner in JS_TEST_RUNNERS:
+            if runner in test_script:
+                test_runner = runner
+                break
+
+    available_scripts = list(data.get("scripts", {}).keys())
+
+    return framework, test_runner, available_scripts
 
 
 def _detect_python_framework(repo_path: Path) -> str | None:
@@ -106,6 +126,35 @@ def _detect_python_framework(repo_path: Path) -> str | None:
         except OSError:
             pass
 
+    return None
+
+
+def _detect_java_framework(repo_path: Path) -> str | None:
+    """Detect Java framework from pom.xml or build.gradle."""
+    for manifest in ("pom.xml", "build.gradle"):
+        mpath = repo_path / manifest
+        if mpath.exists():
+            try:
+                content = mpath.read_text().lower()
+                for fw in JAVA_FRAMEWORKS:
+                    if fw in content:
+                        return fw
+            except OSError:
+                pass
+    return None
+
+
+def _detect_ruby_framework(repo_path: Path) -> str | None:
+    """Detect Ruby framework from Gemfile."""
+    gemfile = repo_path / "Gemfile"
+    if gemfile.exists():
+        try:
+            content = gemfile.read_text().lower()
+            for gem, fw_name in RUBY_FRAMEWORKS.items():
+                if gem in content:
+                    return fw_name
+        except OSError:
+            pass
     return None
 
 
@@ -135,6 +184,20 @@ def _detect_test_runner_python(repo_path: Path) -> str | None:
     return "pytest" if _detect_tests(repo_path) else None
 
 
+def _detect_python_test_extras(repo_path: Path) -> bool:
+    """Check if the Python project has test/dev extras in pyproject.toml or setup.cfg."""
+    for fname in ("pyproject.toml", "setup.cfg", "setup.py"):
+        fpath = repo_path / fname
+        if fpath.exists():
+            try:
+                content = fpath.read_text().lower()
+                if any(extra in content for extra in ("[dev]", "[test]", "[testing]", "extras_require")):
+                    return True
+            except OSError:
+                pass
+    return False
+
+
 def detect_language(repo_path: str) -> RepoAnalysis:
     """Analyze a repository directory and detect language, framework, etc."""
     path = Path(repo_path)
@@ -152,8 +215,11 @@ def detect_language(repo_path: str) -> RepoAnalysis:
             package_manager = PACKAGE_MANAGER_MAP[manifest]
             break
 
+    available_scripts: list[str] = []
+    has_test_extras = False
+
     if language in ("javascript", "typescript"):
-        framework, test_runner = _detect_js_details(path)
+        framework, test_runner, available_scripts = _detect_js_details(path)
         if (path / "tsconfig.json").exists():
             language = "typescript"
         if (path / "yarn.lock").exists():
@@ -163,8 +229,16 @@ def detect_language(repo_path: str) -> RepoAnalysis:
     elif language == "python":
         framework = _detect_python_framework(path)
         test_runner = _detect_test_runner_python(path)
+        has_test_extras = _detect_python_test_extras(path)
+    elif language == "java":
+        framework = _detect_java_framework(path)
+    elif language == "ruby":
+        framework = _detect_ruby_framework(path)
 
     has_dockerfile = (path / "Dockerfile").exists()
+    has_requirements_txt = (path / "requirements.txt").exists()
+    has_yarn_lock = (path / "yarn.lock").exists()
+    has_package_lock = (path / "package-lock.json").exists()
     has_tests = _detect_tests(path)
     is_monorepo = (path / "lerna.json").exists() or (path / "pnpm-workspace.yaml").exists()
 
@@ -179,7 +253,12 @@ def detect_language(repo_path: str) -> RepoAnalysis:
         framework=framework,
         package_manager=package_manager,
         has_dockerfile=has_dockerfile,
+        has_requirements_txt=has_requirements_txt,
+        has_yarn_lock=has_yarn_lock,
+        has_package_lock=has_package_lock,
         has_tests=has_tests,
         test_runner=test_runner,
         is_monorepo=is_monorepo,
+        available_scripts=available_scripts,
+        has_test_extras=has_test_extras,
     )
