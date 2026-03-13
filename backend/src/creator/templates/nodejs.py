@@ -105,7 +105,26 @@ def generate_nodejs_pipeline(analysis: RepoAnalysis, goal: str) -> list[Stage]:
         )
     )
 
-    # Stage 4: Deploy (if goal mentions deployment)
+    # Stage 4: Integration test (after build, before deploy)
+    has_integ_test = "test:integration" in scripts or "test:e2e" in scripts
+    if has_integ_test:
+        integ_script = "test:integration" if "test:integration" in scripts else "test:e2e"
+        integ_cmd = f"{run} run {integ_script}"
+    else:
+        integ_cmd = f"echo 'No integration test script found — skipping'"
+
+    stages.append(
+        Stage(
+            id="integration_test",
+            agent=AgentType.TEST,
+            command=integ_cmd,
+            depends_on=["build"],
+            timeout_seconds=300,
+            critical=False,
+        )
+    )
+
+    # Stage 5: Deploy (if goal mentions deployment)
     deploy_keywords = ["deploy", "release", "publish", "production", "staging"]
     should_deploy = any(kw in goal.lower() for kw in deploy_keywords)
 
@@ -117,7 +136,7 @@ def generate_nodejs_pipeline(analysis: RepoAnalysis, goal: str) -> list[Stage]:
                 id="deploy",
                 agent=AgentType.DEPLOY,
                 command=deploy_cmd,
-                depends_on=["build"],
+                depends_on=["integration_test"],
                 timeout_seconds=600,
                 retry_count=1,
             )

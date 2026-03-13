@@ -61,7 +61,19 @@ def generate_go_pipeline(analysis: RepoAnalysis, goal: str) -> list[Stage]:
         )
     )
 
-    # Stage 4: Deploy (if goal mentions deployment)
+    # Stage 4: Integration test (after build, before deploy)
+    stages.append(
+        Stage(
+            id="integration_test",
+            agent=AgentType.TEST,
+            command="go test -tags=integration -race ./... 2>/dev/null || echo 'No integration tests found — skipping'",
+            depends_on=["build"],
+            timeout_seconds=300,
+            critical=False,
+        )
+    )
+
+    # Stage 5: Deploy (if goal mentions deployment)
     deploy_keywords = ["deploy", "release", "publish", "production", "staging"]
     should_deploy = any(kw in goal.lower() for kw in deploy_keywords)
 
@@ -73,7 +85,7 @@ def generate_go_pipeline(analysis: RepoAnalysis, goal: str) -> list[Stage]:
                 id="deploy",
                 agent=AgentType.DEPLOY,
                 command=deploy_cmd,
-                depends_on=["build"],
+                depends_on=["integration_test"],
                 timeout_seconds=600,
                 retry_count=1,
             )

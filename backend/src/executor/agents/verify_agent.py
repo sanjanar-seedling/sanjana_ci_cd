@@ -26,6 +26,7 @@ class VerifyAgent(BaseAgent):
             cmd=request.command,
             cwd=request.working_dir,
             timeout=request.timeout,
+            env=request.env_vars or None,
         )
         result.stage_id = request.stage_id
         return result
@@ -51,6 +52,7 @@ class VerifyAgent(BaseAgent):
                 cmd=request.command,
                 cwd=request.working_dir,
                 timeout=request.timeout,
+                env=request.env_vars or None,
             )
             result.stage_id = request.stage_id
             return result

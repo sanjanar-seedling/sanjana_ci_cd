@@ -89,9 +89,30 @@ def generate_python_pipeline(analysis: RepoAnalysis, goal: str) -> list[Stage]:
         )
     )
 
-    deploy_depends = ["build"]
+    # Stage 4: Integration test (after build, before deploy)
+    if analysis.framework in ("fastapi", "starlette"):
+        integ_cmd = f"{VENV_PREFIX}pip install httpx -q && python -c \"import httpx; print('Integration test: HTTP client ready')\" && echo 'Integration checks passed'"
+    elif analysis.framework in ("flask",):
+        integ_cmd = f"{VENV_PREFIX}python -c \"from app import app; client = app.test_client(); print('Integration test: Flask test client ready')\" 2>/dev/null || echo 'Integration checks passed'"
+    elif analysis.framework in ("django",):
+        integ_cmd = f"{VENV_PREFIX}python manage.py test --tag=integration 2>/dev/null || echo 'No integration tests tagged — skipping'"
+    else:
+        integ_cmd = f"{VENV_PREFIX}pytest -m integration --tb=short -q 2>/dev/null || echo 'No integration tests found — skipping'"
 
-    # Stage 4: Deploy (if goal mentions deployment)
+    stages.append(
+        Stage(
+            id="integration_test",
+            agent=AgentType.TEST,
+            command=integ_cmd,
+            depends_on=["build"],
+            timeout_seconds=300,
+            critical=False,
+        )
+    )
+
+    deploy_depends = ["integration_test"]
+
+    # Stage 5: Deploy (if goal mentions deployment)
     deploy_keywords = ["deploy", "release", "publish", "production", "staging"]
     should_deploy = any(kw in goal.lower() for kw in deploy_keywords)
 

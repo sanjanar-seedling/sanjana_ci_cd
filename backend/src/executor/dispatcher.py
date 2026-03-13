@@ -26,6 +26,40 @@ AGENT_MAP = {
 }
 
 
+def _collect_upstream_context(
+    stage_id: str, scheduler: DAGScheduler
+) -> tuple[dict[str, str], list[str]]:
+    """Collect environment variables and artifact paths from upstream stages.
+
+    Injects STAGE_<ID>_STATUS, STAGE_<ID>_EXIT_CODE, and STAGE_<ID>_DURATION
+    for each direct predecessor, enabling inter-stage communication.
+    """
+    env_from_upstream: dict[str, str] = {}
+    artifacts_from: list[str] = []
+
+    predecessors = list(scheduler.graph.predecessors(stage_id))
+    for pred_id in predecessors:
+        result = scheduler._results.get(pred_id)
+        if not result:
+            continue
+
+        # Inject predecessor status/exit_code/duration as env vars
+        prefix = f"STAGE_{pred_id.upper().replace('-', '_')}"
+        env_from_upstream[f"{prefix}_STATUS"] = result.status.value
+        env_from_upstream[f"{prefix}_EXIT_CODE"] = str(result.exit_code)
+        env_from_upstream[f"{prefix}_DURATION"] = f"{result.duration_seconds:.1f}"
+
+        # Forward any metadata from predecessor as env vars
+        for key, value in result.metadata.items():
+            env_from_upstream[f"{prefix}_{key.upper()}"] = str(value)
+
+        # Collect artifact paths
+        if result.artifacts:
+            artifacts_from.extend(result.artifacts)
+
+    return env_from_upstream, artifacts_from
+
+
 async def _execute_stage(
     stage_id: str,
     scheduler: DAGScheduler,
@@ -39,6 +73,12 @@ async def _execute_stage(
 
     scheduler.mark_running(stage_id)
 
+    # Collect context from upstream stages for inter-stage communication
+    upstream_env, artifacts_from = _collect_upstream_context(stage_id, scheduler)
+
+    # Merge upstream env vars with stage-defined env vars (stage takes precedence)
+    merged_env = {**upstream_env, **(stage.env_vars or {})}
+
     # Docker execution path
     if use_docker:
         result = await run_in_docker(
@@ -46,7 +86,7 @@ async def _execute_stage(
             work_dir=working_dir,
             language=language,
             timeout=stage.timeout_seconds,
-            env_vars=stage.env_vars or None,
+            env_vars=merged_env or None,
         )
         # If Docker fails (not installed), fall back to local execution
         if result.status == StageStatus.FAILED and "Docker not installed" in result.stderr:
@@ -69,8 +109,9 @@ async def _execute_stage(
         stage_id=stage_id,
         command=stage.command,
         working_dir=working_dir,
-        env_vars=stage.env_vars,
+        env_vars=merged_env,
         timeout=stage.timeout_seconds,
+        artifacts_from=artifacts_from,
     )
 
     result = await agent.execute(request)

@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 import time
 from abc import ABC, abstractmethod
 
@@ -23,12 +24,17 @@ class BaseAgent(ABC):
         logger.info("Running command: %s (cwd=%s, timeout=%ds)", cmd, cwd, timeout)
 
         try:
+            # Merge custom env vars with system environment so PATH etc. are preserved
+            merged_env = None
+            if env:
+                merged_env = {**os.environ, **env}
+
             process = await asyncio.create_subprocess_shell(
                 cmd,
                 cwd=cwd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                env=env,
+                env=merged_env,
             )
 
             try:

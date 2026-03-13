@@ -123,6 +123,14 @@ def _fallback_stages(analysis: RepoAnalysis) -> list[Stage]:
             depends_on=["lint", "test"],
             timeout_seconds=120,
         ),
+        Stage(
+            id="integration_test",
+            agent=AgentType.TEST,
+            command="echo 'No integration tests configured — skipping'",
+            depends_on=["build"],
+            timeout_seconds=300,
+            critical=False,
+        ),
     ]
 
 
